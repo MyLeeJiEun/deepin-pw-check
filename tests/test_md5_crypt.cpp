@@ -179,19 +179,22 @@ TEST(MD5TransformTest, ModifiesBuf) {
     EXPECT_TRUE(changed);
 }
 
-TEST(MD5TransformTest, ConsistentWithFullMD5) {
-    /* MD5Transform with the initial buf and a 64-byte block should
-     * produce the same result as one MD5Update of 64 bytes followed
-     * by MD5Final with appropriate padding. We verify indirectly. */
-    uint32 buf1[4] = {0x67452301U, 0xefcdab89U, 0x98badcfeU, 0x10325476U};
-    uint32 in[16];
-    memset(in, 0, sizeof(in));
-    MD5Transform(buf1, in);
+TEST(MD5TransformTest, EmptyMessagePaddingMatchesPublishedDigest) {
+    /* MD5("") is produced by exactly ONE MD5Transform call: the initial state
+     * with the empty-message padding block (0x80, then 55 zero bytes, then the
+     * 64-bit length 0). Comparing the compressed state against the published
+     * digest (RFC 1321 A.5) proves the compression itself is correct — a
+     * deterministic but wrong transform would still fail here. */
+    uint32 buf[4] = {0x67452301U, 0xefcdab89U, 0x98badcfeU, 0x10325476U};
+    uint32 block[16];
+    memset(block, 0, sizeof(block));
+    block[0] = 0x00000080U; /* 0x80 + zeros = padding of the empty message */
 
-    /* Result should be deterministic (same input -> same output). */
-    uint32 buf2[4] = {0x67452301U, 0xefcdab89U, 0x98badcfeU, 0x10325476U};
-    MD5Transform(buf2, in);
-    EXPECT_EQ(0, memcmp(buf1, buf2, sizeof(buf1)));
+    MD5Transform(buf, block);
+
+    /* MD5("") = d41d8cd98f00b204e9800998ecf8427e, read as little-endian words */
+    const uint32 expected[4] = {0xd98c1dd4U, 0x04b2008fU, 0x980980e9U, 0x7e42f8ecU};
+    EXPECT_EQ(0, memcmp(buf, expected, sizeof(expected)));
 }
 
 /* =====================================================================

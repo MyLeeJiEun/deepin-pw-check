@@ -14,11 +14,16 @@ enable_testing()
 find_package(GTest REQUIRED)
 
 # ---- Coverage flags (gcov) ----
-set(COVERAGE_FLAGS "--coverage -g -O0")
+set(COVERAGE_FLAGS --coverage -g -O0)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --coverage")
 
 # ---- Source root ----
 set(LIB_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../lib)
+get_filename_component(LIB_SRC_DIR_ABS "${LIB_SRC_DIR}" ABSOLUTE)
+
+# Test data directory (absolute path for compile definitions). Must be defined
+# BEFORE the OBJECT-library target_compile_definitions below that reference it.
+set(TESTDATA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/testdata)
 
 # ---- Helper: find iniparser header path ----
 find_path(INIPARSER_INCLUDE_DIR iniparser/iniparser.h
@@ -103,9 +108,6 @@ if(INTL_LIB)
     list(APPEND COMMON_LIBS ${INTL_LIB})
 endif()
 
-# Test data directory (absolute path for compile definitions)
-set(TESTDATA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/testdata)
-
 # =====================================================================
 # Test target: test_pw_check_core
 # =====================================================================
@@ -175,33 +177,50 @@ target_link_libraries(test_debug PRIVATE ${COMMON_LIBS})
 gtest_discover_tests(test_debug)
 
 # =====================================================================
-# Coverage report target (lcov-based)
+# coverage: execute all tests and generate coverage report (lcov-based)
 # =====================================================================
 find_program(LCOV_BIN lcov)
 find_program(GENHTML_BIN genhtml)
+set(_run_test_coverage "")
 if(LCOV_BIN)
-    add_custom_target(coverage
-        # Run tests first to refresh .gcda files
-        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    set(_run_test_coverage
         # Collect raw coverage data
         COMMAND ${LCOV_BIN} --capture --directory ${CMAKE_BINARY_DIR}
+                --rc lcov_branch_coverage=1
                 --output-file ${CMAKE_BINARY_DIR}/coverage.info
-                --no-external
         # Filter out generated/system files
-        COMMAND ${LCOV_BIN} --remove ${CMAKE_BINARY_DIR}/coverage.info
-                '*/moc_*.cpp' '*/moc_*.h' '*/qrc_*.cpp' '*/ui_*.h'
-                '*/qml_*.h' '*/qmlcache_*.cpp' '*/_autogen/*' '*/_json.h'
-                '/usr/*' '*/gtest/*' '*/googlemock/*'
+        COMMAND ${LCOV_BIN} --extract ${CMAKE_BINARY_DIR}/coverage.info
+                --rc lcov_branch_coverage=1
+                "${LIB_SRC_DIR_ABS}/*"
                 --output-file ${CMAKE_BINARY_DIR}/coverage_filtered.info
-        # Generate HTML report (guarded: skip if genhtml not installed)
-        COMMAND $<$<BOOL:${GENHTML_BIN}>:${GENHTML_BIN}> ${CMAKE_BINARY_DIR}/coverage_filtered.info
-                --output-directory ${CMAKE_BINARY_DIR}/coverage_report
-        # Print summary
-        COMMAND ${LCOV_BIN} --summary ${CMAKE_BINARY_DIR}/coverage_filtered.info
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        COMMENT "Generating coverage report in ${CMAKE_BINARY_DIR}/coverage_report/"
-        VERBATIM
     )
-    add_dependencies(coverage test_pw_check_core test_md5_crypt test_passwd_compare test_bigcrypt test_debug)
+    # Generate the HTML report only when genhtml is available. The whole command
+    # (executable AND its arguments) is appended conditionally on purpose: a
+    # generator expression such as $<$<BOOL:${GENHTML_BIN}>:${GENHTML_BIN}> would
+    # expand the executable to nothing while the remaining arguments
+    # (coverage_filtered.info --output-directory ...) still belong to the same
+    # COMMAND.
+    if(GENHTML_BIN)
+        list(APPEND _run_test_coverage
+            COMMAND ${GENHTML_BIN} ${CMAKE_BINARY_DIR}/coverage_filtered.info
+                    --output-directory ${CMAKE_BINARY_DIR}/coverage_report
+        )
+    else()
+        message(WARNING "genhtml not found: `coverage` will not generate an HTML report")
+    endif()
+    # Print summary
+    list(APPEND _run_test_coverage
+        COMMAND ${LCOV_BIN} --summary ${CMAKE_BINARY_DIR}/coverage_filtered.info
+                --rc lcov_branch_coverage=1
+    )
 endif()
+add_custom_target(coverage
+    # Run tests first to refresh .gcda files
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+    ${_run_test_coverage}
+    DEPENDS test_pw_check_core test_md5_crypt test_passwd_compare test_bigcrypt test_debug
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Generating coverage report in ${CMAKE_BINARY_DIR}/coverage_report/"
+    VERBATIM
+)
 
